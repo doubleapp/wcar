@@ -21,7 +21,7 @@ public class WcarContext : ApplicationContext
         _notifyIcon = new NotifyIcon
         {
             Text = "WCAR - Window Configuration Auto Restorer",
-            Icon = SystemIcons.Application,
+            Icon = LoadAppIcon(),
             Visible = true
         };
 
@@ -115,5 +115,13 @@ public class WcarContext : ApplicationContext
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         Application.Exit();
+    }
+
+    private static Icon LoadAppIcon()
+    {
+        var icoPath = Path.Combine(AppContext.BaseDirectory, "wcar.ico");
+        if (File.Exists(icoPath))
+            return new Icon(icoPath);
+        return SystemIcons.Application;
     }
 }

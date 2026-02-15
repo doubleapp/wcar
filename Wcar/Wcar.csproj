@@ -9,8 +9,12 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <ApplicationIcon />
+    <ApplicationIcon>wcar.ico</ApplicationIcon>
     <AssemblyName>wcar</AssemblyName>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="wcar.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>
