@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Wcar.Tests/Wcar.Tests.csproj" />
+  <Project Path="Wcar/Wcar.csproj" />
+</Solution>
