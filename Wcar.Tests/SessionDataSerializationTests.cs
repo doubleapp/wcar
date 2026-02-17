@@ -86,6 +86,47 @@ public class SessionDataSerializationTests
     }
 
     [Fact]
+    public void MonitorInfo_RoundTrips_Serialization()
+    {
+        var snapshot = new SessionSnapshot
+        {
+            Monitors = new List<MonitorInfo>
+            {
+                new() { DeviceName = "\\\\.\\DISPLAY1", Left = 0, Top = 0, Width = 1920, Height = 1080, IsPrimary = true },
+                new() { DeviceName = "\\\\.\\DISPLAY2", Left = 1920, Top = 0, Width = 2560, Height = 1440 }
+            }
+        };
+
+        var json = JsonSerializer.Serialize(snapshot);
+        var deserialized = JsonSerializer.Deserialize<SessionSnapshot>(json);
+
+        Assert.NotNull(deserialized);
+        Assert.Equal(2, deserialized.Monitors.Count);
+        Assert.Equal(1920, deserialized.Monitors[0].Width);
+        Assert.True(deserialized.Monitors[0].IsPrimary);
+        Assert.Equal(2560, deserialized.Monitors[1].Width);
+    }
+
+    [Fact]
+    public void SessionSnapshot_NoMonitors_BackwardCompat()
+    {
+        // Old session.json without Monitors field should load with empty list
+        var oldJson = """
+        {
+            "CapturedAt": "2025-01-15T10:30:00Z",
+            "Windows": [],
+            "DockerDesktopRunning": false
+        }
+        """;
+
+        var deserialized = JsonSerializer.Deserialize<SessionSnapshot>(oldJson);
+
+        Assert.NotNull(deserialized);
+        Assert.Empty(deserialized.Monitors);
+        Assert.Empty(deserialized.Windows);
+    }
+
+    [Fact]
     public void SessionSnapshot_MultipleWindows_PreservesOrder()
     {
         var snapshot = new SessionSnapshot

@@ -18,6 +18,9 @@ public class WcarContext : ApplicationContext
         _config = _configManager.Load();
         _sessionManager = new SessionManager(_configManager);
 
+        // One-time migration: clean up orphaned v1 disk check task
+        new StartupTaskManager().Unregister("WCAR_DiskCheck");
+
         _notifyIcon = new NotifyIcon
         {
             Text = "WCAR - Window Configuration Auto Restorer",
@@ -25,15 +28,13 @@ public class WcarContext : ApplicationContext
             Visible = true
         };
 
-        _menuBuilder = new TrayMenuBuilder(_config, _notifyIcon);
+        _menuBuilder = new TrayMenuBuilder(_config, _notifyIcon, _configManager.DataDir);
         WireMenuEvents();
         _notifyIcon.ContextMenuStrip = _menuBuilder.Build();
 
-        // Start auto-save if enabled
         if (_config.AutoSaveEnabled)
             _sessionManager.StartAutoSave(_config.AutoSaveIntervalMinutes);
 
-        // Auto-restore if enabled (delay 10s to let system settle)
         if (_config.AutoRestoreEnabled)
         {
             var ctx = SynchronizationContext.Current;
@@ -57,7 +58,6 @@ public class WcarContext : ApplicationContext
         _config = _configManager.Load();
         _menuBuilder.RefreshMenu(_config);
 
-        // Restart auto-save with new settings
         _sessionManager.StopAutoSave();
         if (_config.AutoSaveEnabled)
             _sessionManager.StartAutoSave(_config.AutoSaveIntervalMinutes);
@@ -67,6 +67,7 @@ public class WcarContext : ApplicationContext
     {
         _menuBuilder.SaveSessionClicked += OnSaveSession;
         _menuBuilder.RestoreSessionClicked += OnRestoreSession;
+        _menuBuilder.PreviewSessionClicked += OnPreviewSession;
         _menuBuilder.SettingsClicked += OnSettings;
         _menuBuilder.ExitClicked += OnExit;
         _menuBuilder.ScriptClicked += OnScriptClicked;
@@ -91,6 +92,20 @@ public class WcarContext : ApplicationContext
         _sessionManager.RestoreSession(_notifyIcon);
     }
 
+    private void OnPreviewSession(object? sender, EventArgs e)
+    {
+        try
+        {
+            var screenshotDir = ScreenshotHelper.GetScreenshotDirectory(_configManager.DataDir);
+            using var form = new SessionPreviewDialog(screenshotDir);
+            form.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            NotificationHelper.ShowError(_notifyIcon, $"Preview failed: {ex.Message}");
+        }
+    }
+
     private void OnSettings(object? sender, EventArgs e)
     {
         using var form = new SettingsForm(_configManager);
@@ -102,7 +117,7 @@ public class WcarContext : ApplicationContext
 
     private void OnScriptClicked(object? sender, Config.ScriptEntry script)
     {
-        if (!Scripts.ScriptRunner.Run(script.Command))
+        if (!Scripts.ScriptRunner.Run(script.Command, script.Shell))
         {
             NotificationHelper.ShowError(_notifyIcon,
                 $"Failed to run script: {script.Name}");
@@ -121,7 +136,7 @@ public class WcarContext : ApplicationContext
     {
         var icoPath = Path.Combine(AppContext.BaseDirectory, "wcar.ico");
         if (File.Exists(icoPath))
-            return new Icon(icoPath);
+            return new Icon(icoPath, SystemInformation.SmallIconSize);
         return SystemIcons.Application;
     }
 }

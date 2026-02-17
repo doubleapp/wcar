@@ -1,7 +1,18 @@
 using System.Diagnostics;
+using Wcar.Config;
 using Wcar.Interop;
 
 namespace Wcar.Session;
+
+public interface IProcessLauncher
+{
+    Process? Start(ProcessStartInfo psi);
+}
+
+public class DefaultProcessLauncher : IProcessLauncher
+{
+    public Process? Start(ProcessStartInfo psi) => Process.Start(psi);
+}
 
 public class RestoreResult
 {
@@ -11,39 +22,58 @@ public class RestoreResult
 
 public class WindowRestorer
 {
-    private readonly Dictionary<string, bool> _trackedApps;
+    private readonly List<TrackedApp> _trackedApps;
+    private readonly IProcessLauncher _launcher;
 
-    private static readonly HashSet<string> ChromeProcessNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "chrome"
-    };
+    private static readonly HashSet<string> CmdProcessNames = new(StringComparer.OrdinalIgnoreCase) { "cmd" };
+    private static readonly HashSet<string> PsProcessNames = new(StringComparer.OrdinalIgnoreCase) { "powershell", "pwsh" };
+    private static readonly HashSet<string> ExplorerProcessNames = new(StringComparer.OrdinalIgnoreCase) { "explorer" };
 
-    private static readonly HashSet<string> VsCodeProcessNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Code"
-    };
-
-    public WindowRestorer(Dictionary<string, bool> trackedApps)
+    public WindowRestorer(List<TrackedApp> trackedApps, IProcessLauncher? launcher = null)
     {
         _trackedApps = trackedApps;
+        _launcher = launcher ?? new DefaultProcessLauncher();
     }
 
     public RestoreResult Restore(SessionSnapshot snapshot)
     {
         var result = new RestoreResult();
-        var launchedDedup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // (hwnd, zorder) for z-order restoration pass
+        var restoredWindows = new List<(IntPtr Handle, int ZOrder)>();
 
-        // Docker first
-        if (snapshot.DockerDesktopRunning && _trackedApps.GetValueOrDefault("DockerDesktop", false))
-        {
-            RestoreDocker(result);
-        }
+        // Group windows by process name for LaunchOnce handling
+        var launchedOnce = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var win in snapshot.Windows)
         {
             try
             {
-                RestoreWindow(win, result, launchedDedup);
+                var trackedApp = FindTrackedApp(win.ProcessName);
+                if (trackedApp == null)
+                {
+                    result.Errors.Add($"Cannot determine how to launch {win.ProcessName}");
+                    continue;
+                }
+
+                if (trackedApp.Launch == LaunchStrategy.LaunchOnce)
+                {
+                    // Launch once; window matching happens after all launches
+                    if (!launchedOnce.Contains(win.ProcessName))
+                    {
+                        LaunchApp(trackedApp, win, result);
+                        launchedOnce.Add(win.ProcessName);
+                    }
+                }
+                else
+                {
+                    // LaunchPerWindow: launch once per saved window, get handle, position
+                    var hwnd = LaunchAndGetHandle(trackedApp, win, result);
+                    if (hwnd != IntPtr.Zero)
+                    {
+                        SetPlacement(hwnd, win);
+                        restoredWindows.Add((hwnd, win.ZOrder));
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -51,95 +81,136 @@ public class WindowRestorer
             }
         }
 
+        // For LaunchOnce apps: wait for windows to stabilize, then match + position
+        var launchOnceGroups = snapshot.Windows
+            .Where(w => FindTrackedApp(w.ProcessName)?.Launch == LaunchStrategy.LaunchOnce)
+            .GroupBy(w => w.ProcessName, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in launchOnceGroups)
+        {
+            try
+            {
+                var processName = group.Key;
+                var savedWindows = group.ToList();
+
+                var actual = WindowMatcher.WaitForStableWindows(processName, TimeSpan.FromSeconds(15));
+                var matches = WindowMatcher.Match(savedWindows, actual);
+
+                foreach (var (savedIdx, handle) in matches)
+                {
+                    try
+                    {
+                        SetPlacement(handle, savedWindows[savedIdx]);
+                        restoredWindows.Add((handle, savedWindows[savedIdx].ZOrder));
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Warnings.Add($"Could not position {processName} window: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Warnings.Add($"Window matching failed for {group.Key}: {ex.Message}");
+            }
+        }
+
+        // Z-order restoration: bottom-first → topmost last
+        try
+        {
+            RestoreZOrder(restoredWindows);
+        }
+        catch (Exception ex)
+        {
+            result.Warnings.Add($"Z-order restoration failed: {ex.Message}");
+        }
+
         return result;
     }
 
-    private void RestoreWindow(WindowInfo win, RestoreResult result, HashSet<string> launchedDedup)
+    private void LaunchApp(TrackedApp app, WindowInfo win, RestoreResult result)
     {
-        // Skip if already running for Chrome/VSCode (they manage their own windows)
-        if (ChromeProcessNames.Contains(win.ProcessName) || VsCodeProcessNames.Contains(win.ProcessName))
-        {
-            if (IsProcessRunning(win.ProcessName))
-            {
-                result.Warnings.Add($"{win.ProcessName} is already running, skipping launch.");
-                return;
-            }
-
-            if (!launchedDedup.Add(win.ProcessName))
-                return; // Already launched this process in this restore
-        }
-
-        var psi = BuildProcessStartInfo(win);
+        var psi = BuildProcessStartInfo(app, win);
         if (psi == null)
         {
-            result.Errors.Add($"Cannot determine how to launch {win.ProcessName}");
+            result.Errors.Add($"Cannot determine how to launch {app.ProcessName}");
             return;
+        }
+
+        try
+        {
+            _launcher.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            result.Errors.Add($"Failed to start {app.ProcessName}: {ex.Message}");
+        }
+    }
+
+    private IntPtr LaunchAndGetHandle(TrackedApp app, WindowInfo win, RestoreResult result)
+    {
+        var psi = BuildProcessStartInfo(app, win);
+        if (psi == null)
+        {
+            result.Errors.Add($"Cannot determine how to launch {app.ProcessName}");
+            return IntPtr.Zero;
         }
 
         Process? proc;
         try
         {
-            proc = Process.Start(psi);
+            proc = _launcher.Start(psi);
         }
         catch (Exception ex)
         {
-            result.Errors.Add($"Failed to start {win.ProcessName}: {ex.Message}");
-            return;
+            result.Errors.Add($"Failed to start {app.ProcessName}: {ex.Message}");
+            return IntPtr.Zero;
         }
 
-        if (proc == null) return;
+        if (proc == null) return IntPtr.Zero;
 
-        // Wait for window handle
-        var hwnd = WaitForMainWindow(proc, timeout: TimeSpan.FromSeconds(5));
-        if (hwnd == IntPtr.Zero)
-            return;
-
-        // Set window placement
-        SetPlacement(hwnd, win);
+        var hwnd = WaitForMainWindow(proc, TimeSpan.FromSeconds(5));
+        return hwnd;
     }
 
-    private ProcessStartInfo? BuildProcessStartInfo(WindowInfo win)
+    private TrackedApp? FindTrackedApp(string processName)
     {
-        var name = win.ProcessName.ToLowerInvariant();
+        return _trackedApps.FirstOrDefault(
+            a => a.Enabled && a.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase));
+    }
 
-        if (name == "chrome")
-        {
-            return new ProcessStartInfo("chrome") { UseShellExecute = true };
-        }
+    internal ProcessStartInfo? BuildProcessStartInfo(TrackedApp app, WindowInfo win)
+    {
+        var name = app.ProcessName.ToLowerInvariant();
 
-        if (name == "code")
-        {
-            return new ProcessStartInfo("code") { UseShellExecute = true };
-        }
-
-        if (name == "cmd")
+        // CMD: special CWD handling
+        if (CmdProcessNames.Contains(name))
         {
             var cwd = win.WorkingDirectory ?? @"C:\";
-            return new ProcessStartInfo("cmd.exe", $"/K cd /d \"{cwd}\"")
-            {
-                UseShellExecute = true
-            };
+            return new ProcessStartInfo("cmd.exe", $"/K cd /d \"{cwd}\"") { UseShellExecute = true };
         }
 
-        if (name is "powershell" or "pwsh")
+        // PowerShell/pwsh: special CWD handling
+        if (PsProcessNames.Contains(name))
         {
             var cwd = win.WorkingDirectory ?? @"C:\";
-            return new ProcessStartInfo(win.ProcessName + ".exe",
-                $"-NoExit -Command \"Set-Location '{cwd}'\"")
-            {
-                UseShellExecute = true
-            };
+            var exe = app.ExecutablePath ?? (name + ".exe");
+            return new ProcessStartInfo(exe, $"-NoExit -Command \"Set-Location '{cwd}'\"") { UseShellExecute = true };
         }
 
-        if (name == "explorer")
+        // Explorer: special folder path handling
+        if (ExplorerProcessNames.Contains(name))
         {
             var folder = win.FolderPath;
+            var exe = app.ExecutablePath ?? "explorer.exe";
             return folder != null
-                ? new ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = true }
-                : new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+                ? new ProcessStartInfo(exe, $"\"{folder}\"") { UseShellExecute = true }
+                : new ProcessStartInfo(exe) { UseShellExecute = true };
         }
 
-        return null;
+        // Generic: use executable path or process name with UseShellExecute
+        var target = app.ExecutablePath ?? app.ProcessName;
+        return new ProcessStartInfo(target) { UseShellExecute = true };
     }
 
     private static IntPtr WaitForMainWindow(Process proc, TimeSpan timeout)
@@ -155,7 +226,7 @@ public class WindowRestorer
         return IntPtr.Zero;
     }
 
-    private static void SetPlacement(IntPtr hwnd, WindowInfo win)
+    internal static void SetPlacement(IntPtr hwnd, WindowInfo win)
     {
         var wp = WINDOWPLACEMENT.Default;
         wp.ShowCmd = win.ShowCmd;
@@ -169,7 +240,7 @@ public class WindowRestorer
 
         // Clamp to primary monitor if off-screen
         var screen = Screen.PrimaryScreen;
-        if (screen != null)
+        if (screen != null && win.ShowCmd != 3) // Don't clamp maximized windows
         {
             var bounds = screen.WorkingArea;
             if (wp.NormalPosition.Left > bounds.Right ||
@@ -177,7 +248,6 @@ public class WindowRestorer
                 wp.NormalPosition.Top > bounds.Bottom ||
                 wp.NormalPosition.Bottom < bounds.Top)
             {
-                // Center on primary monitor
                 var w = wp.NormalPosition.Width;
                 var h = wp.NormalPosition.Height;
                 wp.NormalPosition.Left = bounds.Left + (bounds.Width - w) / 2;
@@ -188,6 +258,26 @@ public class WindowRestorer
         }
 
         NativeMethods.SetWindowPlacement(hwnd, ref wp);
+    }
+
+    private static void RestoreZOrder(List<(IntPtr Handle, int ZOrder)> windows)
+    {
+        // Sort descending by ZOrder (bottom-first → topmost last)
+        // The last window processed (ZOrder=0) ends up on top
+        const uint SWP_NOSIZE = 0x0001;
+        const uint SWP_NOMOVE = 0x0002;
+        const uint SWP_NOACTIVATE = 0x0010;
+        var HWND_TOP = IntPtr.Zero;
+
+        foreach (var (handle, _) in windows.OrderByDescending(w => w.ZOrder))
+        {
+            try
+            {
+                NativeMethods.SetWindowPos(handle, HWND_TOP, 0, 0, 0, 0,
+                    SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+            }
+            catch { }
+        }
     }
 
     private static bool IsProcessRunning(string processName)
@@ -202,20 +292,6 @@ public class WindowRestorer
         catch
         {
             return false;
-        }
-    }
-
-    private static void RestoreDocker(RestoreResult result)
-    {
-        if (DockerHelper.IsDockerRunning())
-        {
-            result.Warnings.Add("Docker Desktop is already running.");
-            return;
-        }
-
-        if (!DockerHelper.LaunchDocker())
-        {
-            result.Errors.Add("Docker Desktop not found or failed to launch.");
         }
     }
 }

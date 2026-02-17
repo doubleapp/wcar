@@ -45,6 +45,16 @@ public class SessionManager
             File.WriteAllText(tmpPath, json);
             File.Move(tmpPath, _sessionPath, overwrite: true);
 
+            // Fire-and-forget screenshot capture (non-blocking, after session is saved)
+            try
+            {
+                ScreenshotHelper.CaptureAsync(_configManager.DataDir);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[WCAR] Screenshot capture init failed: {ex.Message}");
+            }
+
             return snapshot;
         }
     }

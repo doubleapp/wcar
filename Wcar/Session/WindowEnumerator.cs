@@ -6,7 +6,13 @@ namespace Wcar.Session;
 
 public class WindowEnumerator
 {
-    private readonly Dictionary<string, bool> _trackedApps;
+    private readonly List<TrackedApp> _trackedApps;
+    private readonly IMonitorProvider _monitorProvider;
+
+    private static readonly HashSet<string> SelfProcessNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "wcar"
+    };
 
     private static readonly HashSet<string> CmdProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -23,46 +29,47 @@ public class WindowEnumerator
         "chrome"
     };
 
-    private static readonly HashSet<string> VsCodeProcessNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Code"
-    };
-
     private static readonly HashSet<string> ExplorerProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "explorer"
     };
 
-    private static readonly Dictionary<string, HashSet<string>> AppKeyToProcessNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Chrome"] = ChromeProcessNames,
-        ["VSCode"] = VsCodeProcessNames,
-        ["CMD"] = CmdProcessNames,
-        ["PowerShell"] = PowerShellProcessNames,
-        ["Explorer"] = ExplorerProcessNames,
-    };
-
-    public WindowEnumerator(Dictionary<string, bool> trackedApps)
+    public WindowEnumerator(List<TrackedApp> trackedApps, IMonitorProvider? monitorProvider = null)
     {
         _trackedApps = trackedApps;
+        _monitorProvider = monitorProvider ?? new MonitorProvider();
     }
 
     public SessionSnapshot CaptureSession()
     {
+        MonitorInfo[] monitors;
+        try
+        {
+            monitors = _monitorProvider.GetMonitors();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[WCAR] MonitorProvider failed: {ex.Message}");
+            monitors = Array.Empty<MonitorInfo>();
+        }
+
         var snapshot = new SessionSnapshot
         {
             CapturedAt = DateTime.UtcNow,
-            DockerDesktopRunning = _trackedApps.GetValueOrDefault("DockerDesktop", false)
-                                  && DockerHelper.IsDockerRunning()
+            Monitors = monitors.ToList()
         };
 
         var windows = new List<WindowInfo>();
+        int zOrder = 0;
 
         NativeMethods.EnumWindows((hWnd, _) =>
         {
-            var info = TryCaptureWindow(hWnd);
+            var info = TryCaptureWindow(hWnd, monitors);
             if (info != null)
+            {
+                info.ZOrder = zOrder++;
                 windows.Add(info);
+            }
             return true;
         }, IntPtr.Zero);
 
@@ -70,12 +77,11 @@ public class WindowEnumerator
         return snapshot;
     }
 
-    private WindowInfo? TryCaptureWindow(IntPtr hWnd)
+    private WindowInfo? TryCaptureWindow(IntPtr hWnd, MonitorInfo[] monitors)
     {
         if (!NativeMethods.IsWindowVisible(hWnd))
             return null;
 
-        // Filter out tool windows and windows without owners that aren't app windows
         var exStyle = NativeMethods.GetWindowLong(hWnd, NativeMethods.GWL_EXSTYLE);
         if ((exStyle & NativeConstants.WS_EX_TOOLWINDOW) != 0)
             return null;
@@ -93,6 +99,9 @@ public class WindowEnumerator
         {
             return null;
         }
+
+        if (SelfProcessNames.Contains(processName))
+            return null;
 
         if (!IsTrackedProcess(processName))
             return null;
@@ -139,20 +148,30 @@ public class WindowEnumerator
             info.FolderPath = ExplorerHelper.GetFolderPathForExplorerWindow(hWnd);
         }
 
+        // Assign monitor index based on window center point
+        if (monitors.Length > 0)
+        {
+            try
+            {
+                info.MonitorIndex = MonitorHelper.AssignMonitorIndex(
+                    info.Left, info.Top, info.Width, info.Height, monitors);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[WCAR] AssignMonitorIndex failed: {ex.Message}");
+            }
+        }
+
         return info;
     }
 
     private bool IsTrackedProcess(string processName)
     {
-        foreach (var kvp in _trackedApps)
+        foreach (var app in _trackedApps)
         {
-            if (!kvp.Value) continue;
-
-            if (AppKeyToProcessNames.TryGetValue(kvp.Key, out var names))
-            {
-                if (names.Contains(processName))
-                    return true;
-            }
+            if (!app.Enabled) continue;
+            if (app.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase))
+                return true;
         }
         return false;
     }

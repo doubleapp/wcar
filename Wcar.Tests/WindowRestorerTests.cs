@@ -1,15 +1,31 @@
+using System.Diagnostics;
 using Wcar.Config;
 using Wcar.Session;
 
 namespace Wcar.Tests;
 
+/// <summary>Fake launcher that captures what was started but never actually launches.</summary>
+public class FakeProcessLauncher : IProcessLauncher
+{
+    public List<ProcessStartInfo> Started { get; } = new();
+    public bool ShouldFail { get; set; }
+
+    public Process? Start(ProcessStartInfo psi)
+    {
+        if (ShouldFail) throw new InvalidOperationException("Launch failed");
+        Started.Add(psi);
+        return null; // Return null — restorer handles null gracefully
+    }
+}
+
 public class WindowRestorerTests
 {
+    private static List<TrackedApp> DefaultApps() => AppConfig.DefaultTrackedApps();
+
     [Fact]
     public void Restore_EmptySnapshot_ReturnsNoErrors()
     {
-        var config = new AppConfig();
-        var restorer = new WindowRestorer(config.TrackedApps);
+        var restorer = new WindowRestorer(DefaultApps(), new FakeProcessLauncher());
         var snapshot = new SessionSnapshot();
 
         var result = restorer.Restore(snapshot);
@@ -20,8 +36,7 @@ public class WindowRestorerTests
     [Fact]
     public void Restore_UnknownProcess_ReportsError()
     {
-        var config = new AppConfig();
-        var restorer = new WindowRestorer(config.TrackedApps);
+        var restorer = new WindowRestorer(DefaultApps(), new FakeProcessLauncher());
         var snapshot = new SessionSnapshot
         {
             Windows = new List<WindowInfo>
@@ -37,24 +52,10 @@ public class WindowRestorerTests
     }
 
     [Fact]
-    public void Restore_DockerFlagFalse_DoesNotAttemptDockerLaunch()
-    {
-        var config = new AppConfig();
-        var restorer = new WindowRestorer(config.TrackedApps);
-        var snapshot = new SessionSnapshot { DockerDesktopRunning = false };
-
-        var result = restorer.Restore(snapshot);
-
-        // No Docker-related errors or warnings expected
-        Assert.DoesNotContain(result.Errors, e => e.Contains("Docker"));
-        Assert.DoesNotContain(result.Warnings, w => w.Contains("Docker"));
-    }
-
-    [Fact]
     public void Restore_NullWorkingDirectory_DefaultsGracefully()
     {
-        var config = new AppConfig();
-        var restorer = new WindowRestorer(config.TrackedApps);
+        var launcher = new FakeProcessLauncher();
+        var restorer = new WindowRestorer(DefaultApps(), launcher);
         var snapshot = new SessionSnapshot
         {
             Windows = new List<WindowInfo>
@@ -69,8 +70,120 @@ public class WindowRestorerTests
             }
         };
 
-        // Should not throw — null CWD defaults to C:\
         var exception = Record.Exception(() => restorer.Restore(snapshot));
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public void BuildProcessStartInfo_Cmd_IncludesCwdArgument()
+    {
+        var restorer = new WindowRestorer(DefaultApps(), new FakeProcessLauncher());
+        var cmdApp = new TrackedApp { DisplayName = "CMD", ProcessName = "cmd", ExecutablePath = "cmd.exe", Launch = LaunchStrategy.LaunchPerWindow };
+        var win = new WindowInfo { ProcessName = "cmd", WorkingDirectory = @"C:\Users\Test" };
+
+        var psi = restorer.BuildProcessStartInfo(cmdApp, win);
+
+        Assert.NotNull(psi);
+        Assert.Contains(@"C:\Users\Test", psi!.Arguments);
+    }
+
+    [Fact]
+    public void BuildProcessStartInfo_LaunchOnceApp_UsesExecutablePath()
+    {
+        var restorer = new WindowRestorer(DefaultApps(), new FakeProcessLauncher());
+        var app = new TrackedApp
+        {
+            DisplayName = "Spotify",
+            ProcessName = "Spotify",
+            ExecutablePath = @"C:\Spotify\Spotify.exe",
+            Launch = LaunchStrategy.LaunchOnce
+        };
+        var win = new WindowInfo { ProcessName = "Spotify" };
+
+        var psi = restorer.BuildProcessStartInfo(app, win);
+
+        Assert.NotNull(psi);
+        Assert.Equal(@"C:\Spotify\Spotify.exe", psi!.FileName);
+    }
+
+    [Fact]
+    public void Restore_LaunchPerWindow_CmdStartsWithCwd()
+    {
+        var launcher = new FakeProcessLauncher();
+        var restorer = new WindowRestorer(DefaultApps(), launcher);
+        var snapshot = new SessionSnapshot
+        {
+            Windows = new List<WindowInfo>
+            {
+                new() { ProcessName = "cmd", WorkingDirectory = @"C:\Projects", ShowCmd = 1 }
+            }
+        };
+
+        restorer.Restore(snapshot);
+
+        Assert.Single(launcher.Started);
+        Assert.Contains(@"C:\Projects", launcher.Started[0].Arguments);
+    }
+
+    [Fact]
+    public void Restore_LaunchPerWindow_PwshStartsWithCwd()
+    {
+        var launcher = new FakeProcessLauncher();
+        var restorer = new WindowRestorer(DefaultApps(), launcher);
+        var snapshot = new SessionSnapshot
+        {
+            Windows = new List<WindowInfo>
+            {
+                new() { ProcessName = "pwsh", WorkingDirectory = @"C:\Code", ShowCmd = 1 }
+            }
+        };
+
+        restorer.Restore(snapshot);
+
+        Assert.Single(launcher.Started);
+        Assert.Contains(@"C:\Code", launcher.Started[0].Arguments);
+    }
+
+    [Fact]
+    public void Restore_LaunchOnce_StartsProcessOncePerApp()
+    {
+        var launcher = new FakeProcessLauncher();
+        var apps = new List<TrackedApp>
+        {
+            new() { DisplayName = "Chrome", ProcessName = "chrome", Launch = LaunchStrategy.LaunchOnce, Enabled = true }
+        };
+        var restorer = new WindowRestorer(apps, launcher);
+        var snapshot = new SessionSnapshot
+        {
+            Windows = new List<WindowInfo>
+            {
+                new() { ProcessName = "chrome", Title = "Tab 1" },
+                new() { ProcessName = "chrome", Title = "Tab 2" }
+            }
+        };
+
+        restorer.Restore(snapshot);
+
+        // Should launch chrome exactly once despite two saved windows
+        Assert.Single(launcher.Started);
+    }
+
+    [Fact]
+    public void Restore_ExplorerWithFolder_PassesFolderArg()
+    {
+        var launcher = new FakeProcessLauncher();
+        var restorer = new WindowRestorer(DefaultApps(), launcher);
+        var snapshot = new SessionSnapshot
+        {
+            Windows = new List<WindowInfo>
+            {
+                new() { ProcessName = "explorer", FolderPath = @"C:\Documents", ShowCmd = 1 }
+            }
+        };
+
+        restorer.Restore(snapshot);
+
+        Assert.Single(launcher.Started);
+        Assert.Contains(@"C:\Documents", launcher.Started[0].Arguments);
     }
 }

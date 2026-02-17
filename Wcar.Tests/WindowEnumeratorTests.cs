@@ -32,17 +32,17 @@ public class WindowEnumeratorTests
     [Fact]
     public void CaptureSession_WithAllAppsDisabled_ReturnsEmptyWindows()
     {
-        var trackedApps = new Dictionary<string, bool>
-        {
-            ["Chrome"] = false,
-            ["VSCode"] = false,
-            ["CMD"] = false,
-            ["PowerShell"] = false,
-            ["Explorer"] = false,
-            ["DockerDesktop"] = false
-        };
-        var enumerator = new WindowEnumerator(trackedApps);
+        var trackedApps = AppConfig.DefaultTrackedApps()
+            .Select(a => new TrackedApp
+            {
+                DisplayName = a.DisplayName,
+                ProcessName = a.ProcessName,
+                ExecutablePath = a.ExecutablePath,
+                Launch = a.Launch,
+                Enabled = false   // all disabled
+            }).ToList();
 
+        var enumerator = new WindowEnumerator(trackedApps);
         var snapshot = enumerator.CaptureSession();
 
         Assert.Empty(snapshot.Windows);
@@ -61,5 +61,49 @@ public class WindowEnumeratorTests
             Assert.False(string.IsNullOrEmpty(win.ProcessName));
             Assert.True(win.ShowCmd > 0);
         }
+    }
+
+    [Fact]
+    public void CaptureSession_ZOrderIsAssignedSequentially()
+    {
+        var config = new AppConfig();
+        var enumerator = new WindowEnumerator(config.TrackedApps);
+
+        var snapshot = enumerator.CaptureSession();
+
+        if (snapshot.Windows.Count >= 2)
+        {
+            // ZOrder should be sequential 0, 1, 2, ...
+            for (int i = 0; i < snapshot.Windows.Count; i++)
+                Assert.Equal(i, snapshot.Windows[i].ZOrder);
+        }
+    }
+
+    [Fact]
+    public void CaptureSession_IncludesMonitorList()
+    {
+        var config = new AppConfig();
+        var enumerator = new WindowEnumerator(config.TrackedApps);
+
+        var snapshot = enumerator.CaptureSession();
+
+        // Should capture monitors (at least 1)
+        Assert.NotNull(snapshot.Monitors);
+        Assert.True(snapshot.Monitors.Count >= 1);
+    }
+
+    [Fact]
+    public void CaptureSession_DynamicApp_ByProcessName()
+    {
+        // Add a custom tracked app and verify the enumerator respects it
+        var tracked = new List<TrackedApp>
+        {
+            new() { DisplayName = "Notepad", ProcessName = "notepad", Enabled = true, Launch = LaunchStrategy.LaunchPerWindow }
+        };
+        var enumerator = new WindowEnumerator(tracked);
+
+        // Should not throw — just capture whatever notepad windows exist
+        var exception = Record.Exception(() => enumerator.CaptureSession());
+        Assert.Null(exception);
     }
 }

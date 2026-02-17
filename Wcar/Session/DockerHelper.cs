@@ -2,6 +2,8 @@ using System.Diagnostics;
 
 namespace Wcar.Session;
 
+/// <summary>Docker Desktop is now a regular tracked app. This class is obsolete.</summary>
+[Obsolete("Docker Desktop is now a regular TrackedApp. DockerHelper will be removed in v4.")]
 public static class DockerHelper
 {
     private static readonly string[] DockerProcessNames =

@@ -6,17 +6,20 @@ public class TrayMenuBuilder
 {
     private readonly AppConfig _config;
     private readonly NotifyIcon _notifyIcon;
+    private readonly string _dataDir;
 
     public event EventHandler? SaveSessionClicked;
     public event EventHandler? RestoreSessionClicked;
+    public event EventHandler? PreviewSessionClicked;
     public event EventHandler? SettingsClicked;
     public event EventHandler? ExitClicked;
     public event EventHandler<ScriptEntry>? ScriptClicked;
 
-    public TrayMenuBuilder(AppConfig config, NotifyIcon notifyIcon)
+    public TrayMenuBuilder(AppConfig config, NotifyIcon notifyIcon, string dataDir = "")
     {
         _config = config;
         _notifyIcon = notifyIcon;
+        _dataDir = dataDir;
     }
 
     public ContextMenuStrip Build()
@@ -25,6 +28,15 @@ public class TrayMenuBuilder
 
         menu.Items.Add("Save Session", null, OnSaveSession);
         menu.Items.Add("Restore Session", null, OnRestoreSession);
+
+        var hasScreenshots = !string.IsNullOrEmpty(_dataDir) &&
+                             Session.ScreenshotHelper.HasScreenshots(_dataDir);
+        var previewItem = new ToolStripMenuItem("Preview Saved Session", null, OnPreviewSession)
+        {
+            Enabled = hasScreenshots
+        };
+        menu.Items.Add(previewItem);
+
         menu.Items.Add(new ToolStripSeparator());
 
         var scriptsMenu = BuildScriptsMenu();
@@ -41,10 +53,11 @@ public class TrayMenuBuilder
     public void RefreshMenu(AppConfig config)
     {
         _notifyIcon.ContextMenuStrip?.Dispose();
-        var builder = new TrayMenuBuilder(config, _notifyIcon)
+        var builder = new TrayMenuBuilder(config, _notifyIcon, _dataDir)
         {
             SaveSessionClicked = SaveSessionClicked,
             RestoreSessionClicked = RestoreSessionClicked,
+            PreviewSessionClicked = PreviewSessionClicked,
             SettingsClicked = SettingsClicked,
             ExitClicked = ExitClicked,
             ScriptClicked = ScriptClicked
@@ -58,17 +71,15 @@ public class TrayMenuBuilder
 
         if (_config.Scripts.Count == 0)
         {
-            var noScripts = new ToolStripMenuItem("(No scripts configured)")
-            {
-                Enabled = false
-            };
-            scriptsItem.DropDownItems.Add(noScripts);
+            scriptsItem.DropDownItems.Add(new ToolStripMenuItem("(No scripts configured)") { Enabled = false });
         }
         else
         {
             foreach (var script in _config.Scripts)
             {
                 var item = new ToolStripMenuItem(script.Name);
+                if (!string.IsNullOrEmpty(script.Description))
+                    item.ToolTipText = script.Description;
                 var captured = script;
                 item.Click += (_, _) => ScriptClicked?.Invoke(this, captured);
                 scriptsItem.DropDownItems.Add(item);
@@ -78,15 +89,9 @@ public class TrayMenuBuilder
         return scriptsItem;
     }
 
-    private void OnSaveSession(object? sender, EventArgs e) =>
-        SaveSessionClicked?.Invoke(this, e);
-
-    private void OnRestoreSession(object? sender, EventArgs e) =>
-        RestoreSessionClicked?.Invoke(this, e);
-
-    private void OnSettings(object? sender, EventArgs e) =>
-        SettingsClicked?.Invoke(this, e);
-
-    private void OnExit(object? sender, EventArgs e) =>
-        ExitClicked?.Invoke(this, e);
+    private void OnSaveSession(object? sender, EventArgs e) => SaveSessionClicked?.Invoke(this, e);
+    private void OnRestoreSession(object? sender, EventArgs e) => RestoreSessionClicked?.Invoke(this, e);
+    private void OnPreviewSession(object? sender, EventArgs e) => PreviewSessionClicked?.Invoke(this, e);
+    private void OnSettings(object? sender, EventArgs e) => SettingsClicked?.Invoke(this, e);
+    private void OnExit(object? sender, EventArgs e) => ExitClicked?.Invoke(this, e);
 }

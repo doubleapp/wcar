@@ -1,5 +1,6 @@
 using Wcar.Config;
 using Wcar.Scripts;
+using Wcar.Session;
 
 namespace Wcar.UI;
 
@@ -22,26 +23,13 @@ public partial class SettingsForm : Form
 
     private void LoadSettings()
     {
-        // Auto-save
         chkAutoSaveEnabled.Checked = _config.AutoSaveEnabled;
         nudInterval.Value = Math.Clamp(_config.AutoSaveIntervalMinutes, 1, 1440);
 
-        // Tracked apps
-        chkChrome.Checked = _config.TrackedApps.GetValueOrDefault("Chrome", true);
-        chkVSCode.Checked = _config.TrackedApps.GetValueOrDefault("VSCode", true);
-        chkCMD.Checked = _config.TrackedApps.GetValueOrDefault("CMD", true);
-        chkPowerShell.Checked = _config.TrackedApps.GetValueOrDefault("PowerShell", true);
-        chkExplorer.Checked = _config.TrackedApps.GetValueOrDefault("Explorer", true);
-        chkDocker.Checked = _config.TrackedApps.GetValueOrDefault("DockerDesktop", true);
-
-        // Scripts
+        RefreshTrackedAppsList();
         RefreshScriptsList();
 
-        // Startup - sync with actual registration state
-        chkAutoStart.Checked = _config.AutoStartEnabled
-                               && _startupManager.IsAutoStartRegistered();
-        chkDiskCheck.Checked = _config.DiskCheckEnabled
-                               && _startupManager.IsDiskCheckRegistered();
+        chkAutoStart.Checked = _config.AutoStartEnabled && _startupManager.IsAutoStartRegistered();
         chkAutoRestore.Checked = _config.AutoRestoreEnabled;
     }
 
@@ -51,28 +39,78 @@ public partial class SettingsForm : Form
         btnAddScript.Click += OnAddScript;
         btnEditScript.Click += OnEditScript;
         btnRemoveScript.Click += OnRemoveScript;
+        btnAddApp.Click += OnAddApp;
+        btnRemoveApp.Click += OnRemoveApp;
+        btnToggleLaunch.Click += OnToggleLaunch;
+        lstTrackedApps.ItemChecked += OnAppCheckedChanged;
     }
+
+    // ── Tracked Apps ─────────────────────────────────────────────────────────
+
+    private void RefreshTrackedAppsList()
+    {
+        lstTrackedApps.Items.Clear();
+        foreach (var app in _config.TrackedApps)
+        {
+            var item = new ListViewItem { Checked = app.Enabled, Tag = app };
+            item.Text = app.DisplayName;
+            item.SubItems.Add(app.Launch.ToString());
+            lstTrackedApps.Items.Add(item);
+        }
+    }
+
+    private void OnAppCheckedChanged(object? sender, ItemCheckedEventArgs e)
+    {
+        if (e.Item.Tag is TrackedApp app)
+            app.Enabled = e.Item.Checked;
+    }
+
+    private void OnAddApp(object? sender, EventArgs e)
+    {
+        using var dialog = new AppSearchDialog();
+        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.SelectedApp != null)
+        {
+            _config.TrackedApps.Add(dialog.SelectedApp);
+            RefreshTrackedAppsList();
+        }
+    }
+
+    private void OnRemoveApp(object? sender, EventArgs e)
+    {
+        if (lstTrackedApps.SelectedItems.Count == 0) return;
+
+        var idx = lstTrackedApps.SelectedItems[0].Index;
+        if (idx >= 0 && idx < _config.TrackedApps.Count)
+        {
+            _config.TrackedApps.RemoveAt(idx);
+            RefreshTrackedAppsList();
+        }
+    }
+
+    private void OnToggleLaunch(object? sender, EventArgs e)
+    {
+        if (lstTrackedApps.SelectedItems.Count == 0) return;
+
+        var idx = lstTrackedApps.SelectedItems[0].Index;
+        if (idx >= 0 && idx < _config.TrackedApps.Count)
+        {
+            var app = _config.TrackedApps[idx];
+            app.Launch = app.Launch == LaunchStrategy.LaunchOnce
+                ? LaunchStrategy.LaunchPerWindow
+                : LaunchStrategy.LaunchOnce;
+            RefreshTrackedAppsList();
+        }
+    }
+
+    // ── Save ─────────────────────────────────────────────────────────────────
 
     private void OnSave(object? sender, EventArgs e)
     {
-        // Auto-save
         _config.AutoSaveEnabled = chkAutoSaveEnabled.Checked;
         _config.AutoSaveIntervalMinutes = (int)nudInterval.Value;
-
-        // Tracked apps
-        _config.TrackedApps["Chrome"] = chkChrome.Checked;
-        _config.TrackedApps["VSCode"] = chkVSCode.Checked;
-        _config.TrackedApps["CMD"] = chkCMD.Checked;
-        _config.TrackedApps["PowerShell"] = chkPowerShell.Checked;
-        _config.TrackedApps["Explorer"] = chkExplorer.Checked;
-        _config.TrackedApps["DockerDesktop"] = chkDocker.Checked;
-
-        // Auto-restore
         _config.AutoRestoreEnabled = chkAutoRestore.Checked;
 
-        // Startup registrations
         HandleAutoStartToggle();
-        HandleDiskCheckToggle();
 
         _configManager.Save(_config);
         DialogResult = DialogResult.OK;
@@ -101,42 +139,23 @@ public partial class SettingsForm : Form
         _config.AutoStartEnabled = chkAutoStart.Checked;
     }
 
-    private void HandleDiskCheckToggle()
-    {
-        if (chkDiskCheck.Checked && !_config.DiskCheckEnabled)
-        {
-            if (!_startupManager.RegisterDiskCheck())
-            {
-                var scriptPath = Path.Combine(AppContext.BaseDirectory, "check-disk-space.ps1");
-                var msg = File.Exists(scriptPath)
-                    ? "Failed to register disk check task."
-                    : "check-disk-space.ps1 not found next to the executable.";
-
-                MessageBox.Show(msg, "WCAR",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                chkDiskCheck.Checked = false;
-            }
-        }
-        else if (!chkDiskCheck.Checked && _config.DiskCheckEnabled)
-        {
-            _startupManager.UnregisterDiskCheck();
-        }
-
-        _config.DiskCheckEnabled = chkDiskCheck.Checked;
-    }
+    // ── Scripts ───────────────────────────────────────────────────────────────
 
     private void OnAddScript(object? sender, EventArgs e)
     {
-        if (!CheckUacForScripts()) return;
-
         var name = PromptInput("Add Script", "Script name:");
         if (name == null) return;
 
-        var command = PromptInput("Add Script", "PowerShell command:");
+        var command = PromptInput("Add Script", "Command:");
         if (command == null) return;
 
+        var shell = PromptShellSelection("Add Script");
+        if (shell == null) return;
+
+        var description = PromptInput("Add Script", "Description (optional):", "") ?? "";
+
         var manager = new ScriptManager(_configManager);
-        if (manager.AddScript(name, command))
+        if (manager.AddScript(name, command, shell.Value, description))
         {
             _config = _configManager.Load();
             RefreshScriptsList();
@@ -151,14 +170,18 @@ public partial class SettingsForm : Form
     private void OnEditScript(object? sender, EventArgs e)
     {
         if (lstScripts.SelectedIndex < 0) return;
-        if (!CheckUacForScripts()) return;
 
         var script = _config.Scripts[lstScripts.SelectedIndex];
-        var newCommand = PromptInput("Edit Script", "New command:", script.Command);
+        var newCommand = PromptInput("Edit Script", "Command:", script.Command);
         if (newCommand == null) return;
 
+        var shell = PromptShellSelection("Edit Script", script.Shell);
+        if (shell == null) return;
+
+        var description = PromptInput("Edit Script", "Description:", script.Description) ?? "";
+
         var manager = new ScriptManager(_configManager);
-        manager.EditScript(script.Name, newCommand);
+        manager.EditScript(script.Name, newCommand, shell, description);
         _config = _configManager.Load();
         RefreshScriptsList();
     }
@@ -166,7 +189,6 @@ public partial class SettingsForm : Form
     private void OnRemoveScript(object? sender, EventArgs e)
     {
         if (lstScripts.SelectedIndex < 0) return;
-        if (!CheckUacForScripts()) return;
 
         var script = _config.Scripts[lstScripts.SelectedIndex];
         var manager = new ScriptManager(_configManager);
@@ -179,28 +201,56 @@ public partial class SettingsForm : Form
     {
         lstScripts.Items.Clear();
         foreach (var s in _config.Scripts)
-            lstScripts.Items.Add($"{s.Name}: {s.Command}");
-    }
-
-    private static bool CheckUacForScripts()
-    {
-        if (UacHelper.IsElevated()) return true;
-
-        var result = MessageBox.Show(
-            "Script management requires administrator privileges.\n" +
-            "Would you like to restart WCAR as administrator?",
-            "WCAR - Elevation Required",
-            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-
-        if (result == DialogResult.Yes)
         {
-            UacHelper.RequestElevation(Application.ExecutablePath);
+            var desc = string.IsNullOrEmpty(s.Description) ? "" : $" \u2014 {s.Description}";
+            lstScripts.Items.Add($"[{s.Shell}] {s.Name}: {s.Command}{desc}");
         }
-        return false;
     }
 
-    private static string? PromptInput(string title, string label,
-        string defaultValue = "")
+    private static ScriptShell? PromptShellSelection(string title,
+        ScriptShell current = ScriptShell.PowerShell)
+    {
+        using var form = new Form
+        {
+            Text = title,
+            ClientSize = new Size(350, 110),
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterParent,
+            MaximizeBox = false,
+            MinimizeBox = false
+        };
+
+        var lbl = new Label { Text = "Shell:", Location = new Point(12, 12), AutoSize = true };
+        var combo = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(12, 35),
+            Size = new Size(320, 23)
+        };
+        foreach (var shell in Enum.GetValues<ScriptShell>())
+            combo.Items.Add(shell.ToString());
+        combo.SelectedItem = current.ToString();
+
+        var ok = new Button
+        {
+            Text = "OK", DialogResult = DialogResult.OK,
+            Location = new Point(170, 70), Size = new Size(75, 28)
+        };
+        var cancel = new Button
+        {
+            Text = "Cancel", DialogResult = DialogResult.Cancel,
+            Location = new Point(255, 70), Size = new Size(75, 28)
+        };
+
+        form.AcceptButton = ok;
+        form.CancelButton = cancel;
+        form.Controls.AddRange(new Control[] { lbl, combo, ok, cancel });
+
+        if (form.ShowDialog() != DialogResult.OK) return null;
+        return Enum.Parse<ScriptShell>((string)combo.SelectedItem!);
+    }
+
+    private static string? PromptInput(string title, string label, string defaultValue = "")
     {
         using var form = new Form
         {
