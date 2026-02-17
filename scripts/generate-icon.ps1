@@ -8,7 +8,7 @@ Add-Type -AssemblyName System.Drawing
 $source = [System.Drawing.Image]::FromFile($SourcePng)
 
 # Generate resized bitmaps for each ICO size
-$sizes = @(16, 32, 48, 256)
+$sizes = @(16, 20, 24, 32, 48, 256)
 $bitmaps = @()
 
 foreach ($sz in $sizes) {
@@ -73,4 +73,4 @@ foreach ($bmp in $bitmaps) { $bmp.Dispose() }
 
 Write-Host "Icon created: $OutputIco" -ForegroundColor Green
 Write-Host "Source: $SourcePng" -ForegroundColor Gray
-Write-Host "Sizes: 16, 32, 48, 256 px" -ForegroundColor Gray
+Write-Host "Sizes: 16, 20, 24, 32, 48, 256 px" -ForegroundColor Gray
