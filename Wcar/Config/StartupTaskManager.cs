@@ -6,7 +6,6 @@ namespace Wcar.Config;
 public class StartupTaskManager
 {
     private const string RegistryRunKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-    private const string DiskCheckTaskName = "WCAR_DiskCheck";
     private const string AutoStartTaskName = "WCAR_AutoStart";
 
     public bool Register(string taskName, string command)
@@ -47,29 +46,9 @@ public class StartupTaskManager
         return Unregister(AutoStartTaskName);
     }
 
-    public bool RegisterDiskCheck()
-    {
-        var scriptPath = Path.Combine(AppContext.BaseDirectory, "check-disk-space.ps1");
-        if (!File.Exists(scriptPath))
-            return false;
-
-        var command = $"powershell.exe -ExecutionPolicy Bypass -File \"{scriptPath}\"";
-        return Register(DiskCheckTaskName, command);
-    }
-
-    public bool UnregisterDiskCheck()
-    {
-        return Unregister(DiskCheckTaskName);
-    }
-
     public bool IsAutoStartRegistered()
     {
         return IsRegistered(AutoStartTaskName);
-    }
-
-    public bool IsDiskCheckRegistered()
-    {
-        return IsRegistered(DiskCheckTaskName);
     }
 
     private static bool TryScheduledTask(string taskName, string command)

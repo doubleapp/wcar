@@ -11,7 +11,8 @@ public class ScriptManager
         _configManager = configManager;
     }
 
-    public bool AddScript(string name, string command)
+    public bool AddScript(string name, string command,
+        ScriptShell shell = ScriptShell.PowerShell, string description = "")
     {
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(command))
             return false;
@@ -21,7 +22,7 @@ public class ScriptManager
         if (config.Scripts.Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
             return false;
 
-        config.Scripts.Add(new ScriptEntry(name, command));
+        config.Scripts.Add(new ScriptEntry(name, command, shell, description));
         _configManager.Save(config);
         return true;
     }
@@ -39,7 +40,8 @@ public class ScriptManager
         return true;
     }
 
-    public bool EditScript(string name, string newCommand)
+    public bool EditScript(string name, string? newCommand = null,
+        ScriptShell? shell = null, string? description = null)
     {
         var config = _configManager.Load();
         var script = config.Scripts.FirstOrDefault(
@@ -48,7 +50,10 @@ public class ScriptManager
         if (script == null)
             return false;
 
-        script.Command = newCommand;
+        if (newCommand != null) script.Command = newCommand;
+        if (shell != null) script.Shell = shell.Value;
+        if (description != null) script.Description = description;
+
         _configManager.Save(config);
         return true;
     }

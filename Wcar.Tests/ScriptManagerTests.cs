@@ -53,4 +53,46 @@ public class ScriptManagerTests : IDisposable
         Assert.True(result);
         Assert.Empty(_manager.GetScripts());
     }
+
+    [Fact]
+    public void AddScript_WithShell_StoresShellType()
+    {
+        _manager.AddScript("cmd-test", "dir", ScriptShell.Cmd);
+
+        var scripts = _manager.GetScripts();
+        Assert.Single(scripts);
+        Assert.Equal(ScriptShell.Cmd, scripts[0].Shell);
+    }
+
+    [Fact]
+    public void AddScript_WithDescription_StoresDescription()
+    {
+        _manager.AddScript("test", "echo hi", ScriptShell.Bash, "Says hi");
+
+        var scripts = _manager.GetScripts();
+        Assert.Single(scripts);
+        Assert.Equal("Says hi", scripts[0].Description);
+    }
+
+    [Fact]
+    public void AddScript_DefaultShell_IsPowerShell()
+    {
+        _manager.AddScript("test", "Write-Host Hello");
+
+        var scripts = _manager.GetScripts();
+        Assert.Equal(ScriptShell.PowerShell, scripts[0].Shell);
+    }
+
+    [Fact]
+    public void EditScript_UpdatesShellAndDescription()
+    {
+        _manager.AddScript("test", "Write-Host Hello");
+
+        _manager.EditScript("test", "echo hello", ScriptShell.Cmd, "Updated");
+
+        var scripts = _manager.GetScripts();
+        Assert.Equal("echo hello", scripts[0].Command);
+        Assert.Equal(ScriptShell.Cmd, scripts[0].Shell);
+        Assert.Equal("Updated", scripts[0].Description);
+    }
 }
