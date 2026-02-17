@@ -7,15 +7,27 @@
 
 **Auto-save is silent.** Session backup: session.prev.json maintained before each save.
 
-## US-12: Disk Space Check at Logon
-**As a** user,
-**I want** to toggle a startup task that runs `check-disk-space.ps1` at Windows logon.
+## ~~US-12: Disk Space Check at Logon~~ — Removed in v1.1.0
+> Replaced by US-F04. Users configure disk check as a regular script entry.
 
-**Method:** Task Scheduler via schtasks. Falls back to Registry Run key.
-**Sad flow:** Both methods fail → show error. Script file not found → warning.
+## US-F04: Disk Check as a User Script (v1.1.0)
+**As a** user,
+**I want** to configure a disk space check as a regular script (not a special app toggle),
+**so that** I have full control over its shell, command, and description — same as any other script.
+
+**Replaces:** US-12. The dedicated `DiskCheckEnabled` toggle and `RegisterDiskCheck()` infrastructure are removed.
 
 ## US-13: WCAR Auto-Start with Windows
 **As a** user,
 **I want** WCAR to optionally start at Windows logon.
 
 **Method:** Task Scheduler + Registry Run key fallback.
+
+---
+
+## US-V3-07: Migrate from Old Config (v3)
+**As an** existing user upgrading from v2,
+**I want** my previously tracked apps to be automatically migrated to the new format,
+**so that** I don't lose my settings.
+
+**Technical:** `JsonNode` detects old `Dictionary<string,bool>` format on load; migrates to `List<TrackedApp>` silently; saves back. Disabled apps excluded from migration. Old `"PowerShell"` key produces two entries (`powershell` + `pwsh`).

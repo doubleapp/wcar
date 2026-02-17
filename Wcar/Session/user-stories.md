@@ -44,3 +44,49 @@
 
 **Behavior:** Wait ~10s, then restore. Skips apps already running.
 **Sad flow:** No session → balloon "No saved session to restore."
+
+---
+
+## US-F03: Self-Exclude from Session Capture (v1.1.0)
+**As a** user,
+**I want** WCAR to never capture itself in a session snapshot,
+**so that** auto-restore does not try to re-launch wcar.exe in an infinite loop.
+
+**Implementation:** `WindowEnumerator` skips any window belonging to the `wcar` process (case-insensitive), regardless of whether it's in the tracked apps list.
+
+---
+
+## US-V3-08: Save Monitor Configuration (v3)
+**As a** user,
+**I want** WCAR to remember which monitors I had and where each window was positioned across them,
+**so that** my multi-monitor layout can be properly restored.
+
+**Technical:** `Screen.AllScreens` captured on save; each window tagged with `MonitorIndex` and `ZOrder`.
+
+## US-V3-09: Detect Monitor Change on Restore (v3)
+**As a** user,
+**I want** WCAR to detect when my monitor setup has changed since the session was saved,
+**so that** I'm not surprised by windows appearing in wrong locations.
+
+**Behavior:** Compare saved `Monitors` list to current `Screen.AllScreens`. If different, show screen mapping dialog.
+
+## US-V3-11: Auto-Map Monitors (v3)
+**As a** user,
+**I want** WCAR to automatically figure out the best mapping between my old and new monitor setup,
+**so that** I can restore quickly without manual mapping.
+
+**Algorithm:** Euclidean distance of top-left corners. User can review before applying.
+
+## US-V3-12: Proportional Window Positioning (v3)
+**As a** user,
+**I want** windows to be proportionally resized when mapped to a monitor of different resolution,
+**so that** my layout looks reasonable even on different-sized screens.
+
+**Technical:** Relative position within saved monitor applied proportionally to target monitor; clamped to bounds; maximized windows remain maximized; z-order restored as final pass.
+
+## US-V3-13: Take Session Screenshots (v3)
+**As a** user,
+**I want** WCAR to take a screenshot of each monitor when saving a session,
+**so that** I have a visual reference of what my desktop looked like.
+
+**Technical:** PNG per monitor, `%LocalAppData%\WCAR\screenshots\monitor_N.png`. Fire-and-forget — failure does not affect save.
