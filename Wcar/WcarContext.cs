@@ -136,7 +136,7 @@ public class WcarContext : ApplicationContext
     {
         var icoPath = Path.Combine(AppContext.BaseDirectory, "wcar.ico");
         if (File.Exists(icoPath))
-            return new Icon(icoPath, SystemInformation.SmallIconSize);
+            return new Icon(icoPath);
         return SystemIcons.Application;
     }
 }
