@@ -38,7 +38,8 @@ public class StartupTaskManager
 
     public bool RegisterAutoStart(string exePath)
     {
-        return Register(AutoStartTaskName, $"\"{exePath}\"");
+        var installPath = GetInstalledExePath(exePath);
+        return Register(AutoStartTaskName, $"\"{installPath}\"");
     }
 
     public bool UnregisterAutoStart()
@@ -49,6 +50,45 @@ public class StartupTaskManager
     public bool IsAutoStartRegistered()
     {
         return IsRegistered(AutoStartTaskName);
+    }
+
+    /// <summary>
+    /// Copies the exe (and companion ico) to %LOCALAPPDATA%\WCAR so that
+    /// the startup path is always on the system drive, avoiding issues with
+    /// secondary drives (e.g. exFAT) not being mounted at logon time.
+    /// Returns the installed path, or the original path if copy fails.
+    /// </summary>
+    private static string GetInstalledExePath(string sourceExePath)
+    {
+        var installDir = ConfigManager.GetDefaultDataDir();
+        var installExe = Path.Combine(installDir, Path.GetFileName(sourceExePath));
+
+        // Already running from the install location — nothing to copy
+        if (string.Equals(Path.GetFullPath(sourceExePath),
+                          Path.GetFullPath(installExe),
+                          StringComparison.OrdinalIgnoreCase))
+            return installExe;
+
+        try
+        {
+            Directory.CreateDirectory(installDir);
+
+            // Copy exe (overwrite previous version)
+            File.Copy(sourceExePath, installExe, overwrite: true);
+
+            // Copy companion ico if present
+            var sourceDir = Path.GetDirectoryName(sourceExePath)!;
+            var icoSource = Path.Combine(sourceDir, "wcar.ico");
+            if (File.Exists(icoSource))
+                File.Copy(icoSource, Path.Combine(installDir, "wcar.ico"), overwrite: true);
+
+            return installExe;
+        }
+        catch
+        {
+            // If copy fails, fall back to the original path
+            return sourceExePath;
+        }
     }
 
     private static bool TryScheduledTask(string taskName, string command)

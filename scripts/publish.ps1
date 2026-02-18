@@ -250,6 +250,20 @@ Write-Host "  All tests passed" -ForegroundColor Green
 Write-Host "`n[Build] Packaging release zip..." -ForegroundColor Cyan
 $zipPath = Build-ReleaseZip -Ver $resolvedVersion
 
+# Local install: copy exe + ico to %LOCALAPPDATA%\WCAR for reliable startup
+$localInstallDir = Join-Path $env:LOCALAPPDATA "WCAR"
+Write-Host "`n[Install] Copying to $localInstallDir ..." -ForegroundColor Cyan
+if (-not $DryRun) {
+    if (-not (Test-Path $localInstallDir)) { New-Item -ItemType Directory -Path $localInstallDir -Force | Out-Null }
+    $builtExe = Join-Path $ProjectRoot "Wcar\bin\Release\net10.0-windows\win-x64\wcar.exe"
+    $builtIco = Join-Path $ProjectRoot "Wcar\bin\Release\net10.0-windows\win-x64\wcar.ico"
+    Copy-Item $builtExe (Join-Path $localInstallDir "wcar.exe") -Force
+    if (Test-Path $builtIco) { Copy-Item $builtIco (Join-Path $localInstallDir "wcar.ico") -Force }
+    Write-Host "  Installed to $localInstallDir" -ForegroundColor Green
+} else {
+    Write-Host "  [DRY RUN] Would copy exe to $localInstallDir" -ForegroundColor Yellow
+}
+
 # Publish to selected targets
 $targets = if ($Target -eq "all") { @("github", "scoop") } else { @($Target) }
 
