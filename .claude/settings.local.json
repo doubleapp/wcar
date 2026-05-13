@@ -78,7 +78,9 @@
       "Bash(for:*)",
       "Bash(pip install:*)",
       "Bash(grep:*)",
-      "Bash(npm run coverage:*)"
+      "Bash(npm run coverage:*)",
+      "Bash(dotnet new:*)",
+      "Bash(gh release create:*)"
     ]
   }
 }
